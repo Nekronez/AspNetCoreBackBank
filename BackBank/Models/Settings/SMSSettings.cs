@@ -1,0 +1,13 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace BackBank.Models.Settings
+{
+    public class SMSSettings
+    {
+        public string ApiId { get; set; }
+        public string OTPSecretKey { get; set; }
+    }
+}
