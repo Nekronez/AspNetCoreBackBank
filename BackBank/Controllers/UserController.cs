@@ -114,6 +114,7 @@ namespace BackBank.Controllers
             if ((DateTime.UtcNow - smsSession.CreatedAt) > TimeSpan.FromMinutes(2))
                 return BadRequest(new { Messages = new[] { "The previously sent code is out of date. Send a request to resend SMS." } });
 
+            // Verify OTP
             Hotp hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             smsSession.Attempts++;
             if (!hotp.VerifyHotp(model.Code, smsSession.CodeHotpCounter))
@@ -124,10 +125,9 @@ namespace BackBank.Controllers
                 await _dbContext.SaveChangesAsync();
                 return BadRequest(new { Messages = new[] { "Incorrect SMS code entered." } });
             }
+
             smsSession.Checked = true;
-
             await _dbContext.SaveChangesAsync();
-
             return Ok(new { AuthToken = GetToken(TypeToken.Аuthorization, userId) });
         }
 
@@ -285,11 +285,10 @@ namespace BackBank.Controllers
 
         private string GetToken(TypeToken type, int userId)
         {
-            DateTime now = DateTime.UtcNow;
-            DateTime? expire;
-            string key;
-            User user = _dbContext.users.Find(userId);
+            var now = DateTime.UtcNow;
             AuthSession authSession = null;
+
+            // General claims
             var claims = new List<Claim>
             {
                 new Claim("idUser", Convert.ToString(userId)),
@@ -298,8 +297,6 @@ namespace BackBank.Controllers
 
             if (type == TypeToken.Аuthorization)
             {
-                //expire = now.Add(TimeSpan.FromMinutes(_tokenSettings.AuthLifetime));
-                claims.Add(new Claim("type", "Auth"));
                 claims.Add(new Claim("type", "Auth"));
                 authSession = new AuthSession() {
                     ExpirationTime = now.Add(TimeSpan.FromMinutes(_tokenSettings.AuthLifetime)),
@@ -312,19 +309,14 @@ namespace BackBank.Controllers
                 claims.Add(new Claim("type", "Session"));
             }
 
-            ClaimsIdentity claimsIdentity = new ClaimsIdentity(
-                claims,
-                "Token"
-            );
-
+            ClaimsIdentity claimsIdentity = new ClaimsIdentity(claims, "Token");
             var creds = new SigningCredentials(new X509SecurityKey(_jwtSettings.GetCertificate()), SecurityAlgorithms.RsaSha256);
 
             var jwt = new JwtSecurityToken(
                     issuer: _tokenSettings.Issuer,
                     audience: _tokenSettings.Audience,
                     claims: claimsIdentity.Claims,
-                    signingCredentials: creds
-                    );
+                    signingCredentials: creds);
             jwt.Header.Remove("kid");
             string token = new JwtSecurityTokenHandler().WriteToken(jwt);
 
@@ -346,13 +338,6 @@ namespace BackBank.Controllers
             string hash = BitConverter.ToString(hashBytes).Replace("-", String.Empty);
             return hash;
         }
-
-        private static Dictionary<string, Regex> cards = new Dictionary<string, Regex>()
-        {
-            ["American Express"] = new Regex(@"\A3[47][0-9]{13}\z"),
-            ["MasterCard"] = new Regex(@"\A5[1-5][0-9]{14}\z"),
-            ["Visa"] = new Regex(@"\A4[0-9]{12}(?:[0-9]{3})?\z")
-        };
 
         public static bool CheckCardNumber(string str)
         {
