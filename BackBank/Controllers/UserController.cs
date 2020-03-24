@@ -25,6 +25,8 @@ using BackBank.Internal.Filters;
 using Newtonsoft.Json;
 using OtpNet;
 using Npgsql;
+using System.Net;
+using RestEase;
 
 namespace BackBank.Controllers
 {
@@ -85,10 +87,10 @@ namespace BackBank.Controllers
             Hotp hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             string hotpCode = hotp.ComputeHOTP(1/*hotpCounter*/);
 
-            // Send SMS
-            // HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(model.Phone, hotpCode);
-            // if (sendingResult != HttpStatusCode.OK)
-            //    return StatusCode(500, new { Message = "Error sending SMS code." });
+            //Send SMS
+            HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(model.Phone, hotpCode);
+            if (sendingResult != HttpStatusCode.OK)
+                return StatusCode(500, new { Message = "Error sending SMS code." });
 
             // Save SmsSession
             smsSession = new SmsSession() { UserId = user.Id, CodeHotpCounter = 1/*hotpCounter*/, CreatedAt = DateTime.UtcNow };
@@ -115,7 +117,7 @@ namespace BackBank.Controllers
                 return BadRequest(new { Messages = new[] { "The previously sent code is out of date. Send a request to resend SMS." } });
 
             // Verify OTP
-            Hotp hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
+            var hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             smsSession.Attempts++;
             if (!hotp.VerifyHotp(model.Code, smsSession.CodeHotpCounter))
             {
@@ -148,8 +150,8 @@ namespace BackBank.Controllers
 
             // Generate OTP
             long hotpCounter = _dbContext.GetHotpCounter();
-            Hotp hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
-            string hotpCode = hotp.ComputeHOTP(1/*hotpCounter*/);
+            var hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
+            var hotpCode = hotp.ComputeHOTP(1/*hotpCounter*/);
 
             //HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(user.Phone, hotpCode);
             //if (sendingResult != HttpStatusCode.OK)
@@ -262,8 +264,6 @@ namespace BackBank.Controllers
                 await HttpContext.Response.WriteAsync(result);
                 return Forbid();
             }
-                
-                
 
             var history = _dbContext.historyOperations.Join(
                 _dbContext.cards.Where(c => c.UserId == userId && c.Id == cardId),
@@ -332,16 +332,16 @@ namespace BackBank.Controllers
 
         private string GetHashSHA256(string source)
         {
-            SHA256 sha256Hash = SHA256.Create();
-            byte[] sourceBytes = Encoding.UTF8.GetBytes(source);
-            byte[] hashBytes = sha256Hash.ComputeHash(sourceBytes);
-            string hash = BitConverter.ToString(hashBytes).Replace("-", String.Empty);
+            var sha256Hash = SHA256.Create();
+            var sourceBytes = Encoding.UTF8.GetBytes(source);
+            var hashBytes = sha256Hash.ComputeHash(sourceBytes);
+            var hash = BitConverter.ToString(hashBytes).Replace("-", String.Empty);
             return hash;
         }
 
         public static bool CheckCardNumber(string str)
         {
-            int sum = 0;
+            var sum = 0;
             string card;
             if (!Int64.TryParse(str, out long result))
                 return false;
@@ -356,10 +356,10 @@ namespace BackBank.Controllers
             else
                 return false;
 
-            int len = str.Length;
-            for (int i = 0; i < len; i++)
+            var len = str.Length;
+            for (var i = 0; i < len; i++)
             {
-                int add = (str[i] - '0') * (2 - (i + len) % 2);
+                var add = (str[i] - '0') * (2 - (i + len) % 2);
                 add -= add > 9 ? 9 : 0;
                 sum += add;
             }

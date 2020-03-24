@@ -9,6 +9,7 @@ using BackBank.Models.Settings;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using RestEase;
 
 namespace BackBank.Services.SmsSender
 {
@@ -25,18 +26,12 @@ namespace BackBank.Services.SmsSender
 
         public async Task<HttpStatusCode> SendSmsAsync(string phone, string message)
         {
-            // НУЖНО ВЫНЕСТИ api_id В appsettings.json
-            var api_id = _SMSSettings.ApiId;
-            var uri = $"https://sms.ru/sms/send?api_id={api_id}&to={phone}&msg={message}&json=1";
-            var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.Add("User-Agent", "backBank");
+            var apiId = _SMSSettings.ApiId;
 
-            var client = _clientFactory.CreateClient();
-            var response = await client.SendAsync(request);
-            var responseString = await response.Content.ReadAsStringAsync();
-            var jsonString = JObject.Parse(responseString);
+            ISMSruApi smsApi = RestClient.For<ISMSruApi>("https://sms.ru");
+            var result = smsApi.SendSmsAsync(apiId, phone, message).Result;
 
-            if(jsonString["sms"][phone]["status"].ToString() == "OK")
+            if (result.Status == "OK")
             {
                 return HttpStatusCode.OK;
             }
