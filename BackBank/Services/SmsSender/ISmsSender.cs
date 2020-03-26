@@ -10,6 +10,6 @@ namespace BackBank.Services.SmsSender
 {
     public interface ISmsSender
     {
-        Task<HttpStatusCode> SendSmsAsync(string phone, string message);
+        HttpStatusCode SendSmsAsync(string phone, string message);
     }
 }

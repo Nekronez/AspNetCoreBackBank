@@ -9,7 +9,6 @@ namespace BackBank.Models.Settings
     {
         public string Issuer { get; set; }
         public string Audience { get; set; }
-        public string AuthKey { get; set; }
         public int AuthLifetime { get; set; }
     }
 }

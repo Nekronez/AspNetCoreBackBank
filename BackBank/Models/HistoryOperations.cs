@@ -11,7 +11,7 @@ namespace BackBank.Models
         public int CardId { get; set; }
         public string OperationName { get; set; }
         public string OperationStatus { get; set; }
-        public double OperationSumma { get; set; }
+        public double Amount { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 }

@@ -24,7 +24,7 @@ namespace BackBank.Services.SmsSender
             _SMSSettings = SMSSettings.Value;
         }
 
-        public async Task<HttpStatusCode> SendSmsAsync(string phone, string message)
+        public HttpStatusCode SendSmsAsync(string phone, string message)
         {
             var apiId = _SMSSettings.ApiId;
 
@@ -32,13 +32,9 @@ namespace BackBank.Services.SmsSender
             var result = smsApi.SendSmsAsync(apiId, phone, message).Result;
 
             if (result.Status == "OK")
-            {
                 return HttpStatusCode.OK;
-            }
             else
-            {
                 return HttpStatusCode.BadRequest;
-            }
         }
     }
 }

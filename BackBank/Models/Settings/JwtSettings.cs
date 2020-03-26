@@ -13,8 +13,6 @@ namespace BackBank.Models.Settings
 
         public CertificateSettings Certificate { get; set; }
 
-        public TimeSpan TokenLifeTime { get; set; }
-
         internal X509Certificate2 GetCertificate()
         {
             if (Certificate == null)

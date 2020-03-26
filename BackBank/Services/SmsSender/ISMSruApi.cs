@@ -10,7 +10,7 @@ namespace BackBank.Services.SmsSender
     {
         [Get("sms/send?json=1")]
         Task<SMSruResult> SendSmsAsync([Query("api_id")] string ApiId,
-                                           [Query("to")] string Phone,
-                                           [Query("msg")] string Message);
+                                       [Query("to")] string Phone,
+                                       [Query("msg")] string Message);
     }
 }

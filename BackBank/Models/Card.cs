@@ -14,7 +14,7 @@ namespace BackBank.Models
         public string Name { get; set; }
         public double Balance { get; set; }
         public DateTime ActivationDate { get; set; }
-        public DateTime ExpireDate { get; set; }
+        public string ExpireDate { get; set; }
         public int UserId { get; set; }
     }
 }

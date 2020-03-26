@@ -10,23 +10,14 @@ using BackBank.Models.Incoming;
 using BackBank.Models.Settings;
 using BackBank.Services.SmsSender;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Cryptography;
-using System.Net.Http;
-using System.IO;
-using Newtonsoft.Json.Linq;
-using Microsoft.AspNetCore.Identity;
-using System.Text.RegularExpressions;
 using BackBank.Internal.Filters;
-using Newtonsoft.Json;
 using OtpNet;
-using Npgsql;
-using System.Net;
-using RestEase;
+using BackBank.Internal;
 
 namespace BackBank.Controllers
 {
@@ -35,72 +26,70 @@ namespace BackBank.Controllers
     [Produces("application/json")]
     public class UserController : ControllerBase
     {
-        enum TypeToken
-        {
-            Session,
-            Аuthorization
-        }
+        enum TypeToken { Session, Аuthorization }
 
         private ISmsSender _smsSender;
         private AppDbContext _dbContext;
         private TokenSettings _tokenSettings;
         private readonly JwtSettings _jwtSettings;
         private readonly SMSSettings _SMSSettings;
+        private readonly Hotp hotp;
 
         public UserController(ISmsSender smsSender, 
                               AppDbContext appDbContext, 
-                              IOptions<TokenSettings> tokenOptions,
-                              IOptions<SMSSettings> smsOptions,
+                              IOptions<TokenSettings> tokenSettings,
+                              IOptions<SMSSettings> smsSettings,
                               JwtSettings jwtSettings)
         {
             _smsSender = smsSender;
             _dbContext = appDbContext;
-            _tokenSettings = tokenOptions.Value;
+            _tokenSettings = tokenSettings.Value;
             _jwtSettings = jwtSettings;
-            _SMSSettings = smsOptions.Value;
+            _SMSSettings = smsSettings.Value;
+            hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
         }
 
         [HttpPost("/user/register")]
-        public async Task<IActionResult> Registration([FromBody] RegistrModel model)
+        public Task<IActionResult> Registration([FromBody] RegistrModel model)
         {
             // Checking user existence
             User user = _dbContext.users.Where(u => u.Phone == model.Phone).FirstOrDefault();
             if (user == null)
-                return BadRequest(new { Messages = new[] { "Invalid phone or card number." } });
+                return BadRequest(new { Messages = new[] { "Incorrect phone or card number." } });
 
             // Verify PAN
             Card card = _dbContext.cards.Where(c => c.PAN == model.PAN).FirstOrDefault();
             if (!CheckCardNumber(model.PAN) || card == null || card.UserId != user.Id)
-                return BadRequest(new { Messages = new[] { "Invalid phone or card number." } });
+                return BadRequest(new { Messages = new[] { "Incorrect phone or card number." } });
 
             // Check if SMS was sent recently to this user
             SmsSession smsSession = _dbContext.smsSessions.Where(s => s.UserId == user.Id)
-                                                          .OrderBy(s => s.Id)
+                                                          .OrderByDescending(s => s.Id)
                                                           .Include(s => s.User)
-                                                          .LastOrDefault();
+                                                          .Take(1)
+                                                          .FirstOrDefault();
             if (smsSession != null)
                 if (Math.Abs((smsSession.CreatedAt - DateTime.UtcNow).Minutes) < 1)
                     return BadRequest(new { Messages = new[] { "SMS code has already been sent to you. To send a new one, wait a minute from the moment of sending the past." } });
 
             // Generate OTP
             long hotpCounter = _dbContext.GetHotpCounter();
-            Hotp hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             string hotpCode = hotp.ComputeHOTP(1/*hotpCounter*/);
 
             //Send SMS
-            HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(model.Phone, hotpCode);
-            if (sendingResult != HttpStatusCode.OK)
-                return StatusCode(500, new { Message = "Error sending SMS code." });
+            //HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(model.Phone, hotpCode);
+            //if (sendingResult != HttpStatusCode.OK)
+            //    return StatusCode(500, new { Message = "Error sending SMS code." });
 
             // Save SmsSession
             smsSession = new SmsSession() { UserId = user.Id, CodeHotpCounter = 1/*hotpCounter*/, CreatedAt = DateTime.UtcNow };
             _dbContext.smsSessions.Add(smsSession);
-            await _dbContext.SaveChangesAsync();
+            //await _dbContext.SaveChangesAsync();
 
-            return StatusCode(201, new
+            return Created("", new
             {
                 Message = "An SMS with a verification code has been sent to your number.",
-                SessionToken = GetToken(TypeToken.Session, user.Id)
+                SessionToken = IssueToken(TypeToken.Session, user.Id)
             });
         }
 
@@ -108,16 +97,13 @@ namespace BackBank.Controllers
         [Authorize("SessionPolicy")]
         public async Task<IActionResult> VerifyPhone([FromBody] SmsCodeModel model)
         {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            SmsSession smsSession = _dbContext.smsSessions.Where(s => s.UserId == userId).OrderBy(s => s.Id).LastOrDefault();
+            SmsSession smsSession = _dbContext.smsSessions.Where(s => s.UserId == User.GetId()).OrderBy(s => s.Id).LastOrDefault();
             if (smsSession == null)
                 return NotFound(new { Messages = new[] { "SMS code was not sent to the phone number." } });
             if ((DateTime.UtcNow - smsSession.CreatedAt) > TimeSpan.FromMinutes(2))
                 return BadRequest(new { Messages = new[] { "The previously sent code is out of date. Send a request to resend SMS." } });
 
             // Verify OTP
-            var hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             smsSession.Attempts++;
             if (!hotp.VerifyHotp(model.Code, smsSession.CodeHotpCounter))
             {
@@ -130,19 +116,18 @@ namespace BackBank.Controllers
 
             smsSession.Checked = true;
             await _dbContext.SaveChangesAsync();
-            return Ok(new { AuthToken = GetToken(TypeToken.Аuthorization, userId) });
+            return Ok(new { AuthToken = IssueToken(TypeToken.Аuthorization, User.GetId()) });
         }
 
         [HttpPost("/send/sms")]
         [Authorize("SessionPolicy")]
         public async Task<IActionResult> SendNewSms()
         {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            SmsSession smsSession = _dbContext.smsSessions.Where(s => s.UserId == userId)
-                                                          .OrderBy(s => s.Id)
+            SmsSession smsSession = _dbContext.smsSessions.Where(s => s.UserId == User.GetId())
+                                                          .OrderByDescending(s => s.Id)
                                                           .Include(s => s.User)
-                                                          .LastOrDefault();
+                                                          .Take(1)
+                                                          .FirstOrDefault();
             if (smsSession == null)
                 return BadRequest(new { Messages = new[] { "Resending SMS is only available after registration." } });
             if (Math.Abs((smsSession.CreatedAt - DateTime.UtcNow).Minutes) < 1)
@@ -150,7 +135,6 @@ namespace BackBank.Controllers
 
             // Generate OTP
             long hotpCounter = _dbContext.GetHotpCounter();
-            var hotp = new Hotp(Encoding.ASCII.GetBytes(_SMSSettings.OTPSecretKey), mode: OtpHashMode.Sha256, hotpSize: 6);
             var hotpCode = hotp.ComputeHOTP(1/*hotpCounter*/);
 
             //HttpStatusCode sendingResult = await _smsSender.SendSmsAsync(user.Phone, hotpCode);
@@ -168,122 +152,26 @@ namespace BackBank.Controllers
         [Authorize("SessionPolicy")]
         public async Task<IActionResult> Autauthentication([FromBody] AuthModel model)
         {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-            User user = await _dbContext.users.FindAsync(userId);
+            User user = await _dbContext.users.FindAsync(User.GetId());
 
             if(user == null || user.Passcode != GetHashSHA256(model.Passcode))
                 return BadRequest(new { Messages = new[] { "Invalid passcode." } });
 
-            return Ok(new { AuthToken = GetToken(TypeToken.Аuthorization, user.Id) });
+            return Ok(new { AuthToken = IssueToken(TypeToken.Аuthorization, user.Id) });
         }
 
         [Authorize]
         [HttpPost("/user/passcode")]
         public async Task<IActionResult> CreatePasscode([FromBody] PasscodeModel model)
         {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            User user = _dbContext.users.Find(userId);
+            User user = _dbContext.users.Find(User.GetId());
             user.Passcode = GetHashSHA256(model.Passcode);
             await _dbContext.SaveChangesAsync();
 
             return StatusCode(201, new { Message = "Passcode created successfully." });
         }
 
-        [Authorize]
-        [HttpGet("/card")]
-        public async Task<IActionResult> GetCards()
-        {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            List<Card> cards = await _dbContext.cards.Where(c => c.UserId == userId).ToListAsync();
-
-            return Ok(cards);
-        }
-
-        [Authorize]
-        [HttpGet("/card/{id}")]
-        public async Task<IActionResult> GetCardInfo(int id)
-        {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            Card card = await _dbContext.cards.Where(c => c.Id == id).FirstOrDefaultAsync();
-
-            if (card == null)
-                return NotFound(new { Messages = new[] { "Not found." } });
-            if (card.UserId != userId)
-            {
-                HttpContext.Response.ContentType = "application/json; charset=utf-8";
-                var result = JsonConvert.SerializeObject(new { Messages = new[] { "Access denied." } });
-                await HttpContext.Response.WriteAsync(result);
-                return Forbid();
-            }
-
-            return Ok(card);
-        }
-
-        [Authorize]
-        [HttpGet("/history")]
-        public IActionResult GetHistory()
-        {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            var history = _dbContext.historyOperations.Join(
-                _dbContext.cards.Where(c => c.UserId == userId),
-                h => h.CardId, 
-                c => c.Id, 
-                (h, c) => new { 
-                    CardName = c.Name,
-                    h.OperationName,
-                    h.OperationStatus,
-                    h.OperationSumma,
-                    h.CreatedAt
-                });
-
-            if (history.ToList().Count == 0)
-                return NoContent();
-
-            return Ok(history);
-        }
-
-        [Authorize]
-        [HttpGet("/history/{cardId}")]
-        public async Task<IActionResult> GetHistoryCard(int cardId)
-        {
-            int userId = int.Parse(User.Claims.Where(c => c.Type == "idUser").FirstOrDefault().Value);
-
-            Card card = await _dbContext.cards.Where(c => c.Id == cardId).FirstOrDefaultAsync();
-
-            if (card == null)
-                return NotFound( new { Messages = new[] { "Not found." } });
-
-            if (card.UserId != userId)
-            {
-                HttpContext.Response.ContentType = "application/json; charset=utf-8";
-                var result = JsonConvert.SerializeObject(new { Messages = new[] { "Access denied." } });
-                await HttpContext.Response.WriteAsync(result);
-                return Forbid();
-            }
-
-            var history = _dbContext.historyOperations.Join(
-                _dbContext.cards.Where(c => c.UserId == userId && c.Id == cardId),
-                h => h.CardId,
-                c => c.Id,
-                (h, c) => new {
-                    CardName = c.Name,
-                    h.OperationName,
-                    h.OperationStatus,
-                    h.OperationSumma,
-                    h.CreatedAt
-                });
-
-            if (history.ToList().Count == 0)
-                return NoContent();
-
-            return Ok(history);
-        }
-
-        private string GetToken(TypeToken type, int userId)
+        private string IssueToken(TypeToken type, int userId)
         {
             var now = DateTime.UtcNow;
             AuthSession authSession = null;
@@ -339,7 +227,7 @@ namespace BackBank.Controllers
             return hash;
         }
 
-        public static bool CheckCardNumber(string str)
+        private static bool CheckCardNumber(string str)
         {
             var sum = 0;
             string card;
